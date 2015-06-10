@@ -1,7 +1,7 @@
 /* 
- * Copyright (C) 2011 Department of Robotics Brain and Cognitive Sciences - Istituto Italiano di Tecnologia
- * Author: Carlo Ciliberto
- * email:  carlo.ciliberto@iit.it
+ * Copyright (C) 2015 iCub Facility - Istituto Italiano di Tecnologia
+ * Author: Carlo Ciliberto, Giulia Pasquale
+ * email:  carlo.ciliberto@iit.it giulia.pasquale@iit.it
  * Permission is granted to copy, distribute, and/or modify this program
  * under the terms of the GNU General Public License, version 2 or any
  * later version published by the Free Software Foundation.
@@ -773,10 +773,13 @@ private:
             {
                 reply_are.clear();
                 cmd_are.clear();
+
                 cmd_are.addString("track");
                 cmd_are.addString("motion");
                 cmd_are.addString("no_sacc");
+
                 port_rpc_are_cmd.write(cmd_are,reply_are);
+
                 if(reply_are.size()>0 && reply_are.get(0).asVocab()==ACK)
                 {
                     set_mode(MODE_HUMAN_TRACK);
@@ -1245,10 +1248,10 @@ public:
                         reply.addString("ack");
                     }
                     else
-                        reply.addString("Error!");
+                        reply.addString("Error! Cannot give ARE 'home' command.");
                 }
                 else
-                    reply.addString("Error!");
+                    reply.addString("Error! Cannot set ARE to 'idle'.");
 
                 mutex.post();
                 break;
@@ -1269,7 +1272,7 @@ public:
                     reply.addString("ack");
                 }
                 else
-                    reply.addString("Error!");
+                    reply.addString("Error! Cannot set ARE to 'idle'.");
                 // end tracking code
 
                 mutex.post();
