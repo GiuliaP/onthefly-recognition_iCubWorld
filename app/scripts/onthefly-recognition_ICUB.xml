@@ -24,6 +24,7 @@
         
 		<module>
                 <name>actionsRenderingEngine</name>
+                <parameters>--motor:eyes_traj_time 2.0 --motor:neck_traj_time 3.5 --motor:block_eyes 0.0</parameters>
                 <node>icub16</node>
                 <tag>actionsRenderingEngine</tag>
         </module>
