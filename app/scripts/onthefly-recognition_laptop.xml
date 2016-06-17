@@ -1,0 +1,115 @@
+
+<application>
+<name>On The Fly Recognition iCub World</name>
+
+        <dependencies>
+                <port>/camera</port>
+                <port>/disp</port>
+        </dependencies>
+
+        <!-- Modules -->
+
+		<module>
+                <name>dispBlobber --imH 240 --imW 320 --minBlobSize 400 --dispThreshRatioLow 100 --dispThreshRatioHigh 100</name>
+                <node>node</node>
+        </module>
+        
+		<module>
+                <name>managerOnTheFly</name>  
+				<parameters>--observe_laptop_time_training 10 --observe_laptop_time_classify 5 --single_operator_time 5</parameters>
+                <node>node</node>             
+        </module>
+		
+		<module>
+                <name>caffeCoder</name>
+                <node>node</node>
+        </module>
+        
+		<module>
+                <name>linearClassifierModule</name>
+                <node>node</node>
+        </module>
+
+        <module>
+                <name>yarpview</name>
+                <parameters>--name /view/opt/dispBlobber</parameters>
+                <node>node</node>
+        </module>
+
+        <module>
+                <name>yarpview</name>
+                <parameters>--name /view/show/onTheFlyRecognition</parameters>
+                <node>node</node>
+                <tag>viewer_box</tag>
+        </module>
+
+        <module>
+                <name>yarpview</name>
+                <parameters>--name /view/confidence/onTheFlyRecognition</parameters>
+                <node>node</node>         
+        </module>
+		
+        <!-- Connections -->
+
+        <connection>
+                <from>/disp</from>
+                <to>/dispBlobber/img:i</to>
+                <protocol>tcp</protocol>
+        </connection> 
+
+        <connection>
+                <from>/camera</from>
+                <to>/onTheFlyRecognition/img:i</to>
+                <protocol>tcp</protocol>
+        </connection>
+
+        <connection>
+                <from>/dispBlobber/blobs:o</from>
+                <to>/onTheFlyRecognition/blobs:i</to>
+                <protocol>tcp</protocol>
+        </connection>
+
+        <connection>
+                <from>/onTheFlyRecognition/crop:o</from>
+                <to>/caffeCoder/img:i</to>
+                <protocol>tcp</protocol>
+        </connection>
+        
+         <connection>
+                <from>/caffeCoder/code:o</from>
+                <to>/linearClassifier/features:i</to>
+                <protocol>tcp</protocol>
+        </connection> 
+
+        <connection>
+                <from>/linearClassifier/scores:o</from>
+                <to>/onTheFlyRecognition/scores:i</to>
+                <protocol>tcp</protocol>
+        </connection> 
+
+        <connection>
+                <from>/onTheFlyRecognition/classifier:io</from>
+                <to>/linearClassifier/rpc</to>
+                <protocol>tcp</protocol>
+        </connection>
+
+        <connection>
+                <from>/onTheFlyRecognition/show:o</from>
+                <to>/view/show/onTheFlyRecognition</to>
+                <protocol>tcp</protocol>
+        </connection>
+        
+        <connection>
+                <from>/onTheFlyRecognition/confidence:o</from>
+                <to>/view/confidence/onTheFlyRecognition</to>
+                <protocol>tcp</protocol>
+        </connection>
+
+         <connection>
+                <from>/dispBlobber/opt:o</from>
+                <to>/view/opt/nearBlobber</to>
+                <protocol>tcp</protocol>
+        </connection>
+        
+        
+</application>

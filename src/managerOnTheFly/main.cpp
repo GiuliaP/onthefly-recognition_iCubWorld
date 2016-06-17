@@ -55,22 +55,19 @@ using namespace yarp::math;
 #define                 NACK                VOCAB4('n','a','c','k')
 
 #define                 STATE_IDLE          0
+
 #define                 STATE_TRAINING      1
-#define                 STATE_CLASSIFY      2
+#define                 STATE_CLASSIFYING   2
 #define                 STATE_OBSERVING     3
 
-#define                 MODE_ROBOT          0
-#define                 MODE_HUMAN_IDLE     1
-#define                 MODE_HUMAN_TRACK    2
+#define                 MODE_LAPTOP_IDLE     1
+#define                 MODE_LAPTOP_OBSERVE  2
 
 #define                 CMD_IDLE            VOCAB4('i','d','l','e')
 
 #define                 CMD_OBSERVE         VOCAB4('o','b','s','e')
 #define                 CMD_TRAIN           VOCAB4('t','r','a','i')
 #define                 CMD_CLASSIFY        VOCAB4('c','l','a','s')
-
-#define                 CMD_ROBOT           VOCAB4('r','o','b','o')
-#define                 CMD_HUMAN           VOCAB4('h','u','m','a')
 
 #define                 CMD_FORGET          VOCAB4('f','o','r','g')
 
@@ -93,15 +90,11 @@ private:
     Port                                port_out_img;
     Port                                port_out_imginfo;
     //////////////////////////////////////////////////////////////////////////////////////////////////////
-    //rpc
-    RpcClient                           port_rpc_are_get_hand;
 
     int                                 radius_crop; 
-    int                                 radius_crop_robot;
-    int                                 radius_crop_human;
+    int                                 radius_crop_laptop;
 
     //////////////////////////////////////////////////////////////////////////////////////////////////////
-    //ImageOf<PixelBgr>                   img_crop;
     ImageOf<PixelRgb>                   img_crop;
     //////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -128,9 +121,8 @@ public:
 
         string name=rf.find("name").asString().c_str();
 
-        radius_crop_robot=rf.check("radius_crop_robot",Value(80)).asInt();
-        radius_crop_human=rf.check("radius_crop_human",Value(40)).asInt();
-        radius_crop=radius_crop_human;
+        radius_crop_laptop = rf.check("radius_crop_laptop",Value(80)).asInt();
+        radius_crop = radius_crop_laptop;
 
         //Ports
         //-----------------------------------------------------------
@@ -146,15 +138,10 @@ public:
         port_out_imginfo.open(("/"+name+"/imginfo:o").c_str());
     //////////////////////////////////////////////////////////////////////////////////////////////////////
 
-        //rpc
-        port_rpc_are_get_hand.open(("/"+name+"/are/hand:io").c_str());
-        //------------------------------------------------------------
-
         current_class="?";
         true_class="?";
 
         coding_interrupted=true;
-        
         
         blink_init_time=Time::now();
         blink_visible_time=0.5;
@@ -180,7 +167,7 @@ public:
         int x,y;
         int pixelCount=0;
 
-        if(mode==MODE_HUMAN_TRACK || mode==MODE_HUMAN_IDLE)
+        if(mode==MODE_LAPTOP_OBSERVE || mode==MODE_LAPTOP_IDLE)
         {
             Bottle *blobs=port_in_blobs.read(false);
             if(blobs!=NULL)
@@ -189,29 +176,8 @@ public:
                 x = window->get(0).asInt();
                 y = window->get(1).asInt();
                 pixelCount = window->get(2).asInt();
-                radius_crop=radius_crop_human;
-                found=true;
-            }
-        }
-        
-        if(mode==MODE_ROBOT)
-        {
-            Bottle cmd_are_hand,reply_are_hand;
-            cmd_are_hand.addString("get");
-            cmd_are_hand.addString("hand");
-            cmd_are_hand.addString("image");
-            
-            port_rpc_are_get_hand.write(cmd_are_hand,reply_are_hand);
-            
-            if(reply_are_hand.size()>0 && reply_are_hand.get(0).asVocab()!=NACK)
-            {
-                x=reply_are_hand.get(2).asInt();
-                y=reply_are_hand.get(3).asInt();
-                pixelCount = -1;
-                radius_crop=radius_crop_robot;
-                
-                if(0<x && x<img->width() && 0<y && y<img->height())
-                    found=true;
+                radius_crop = radius_crop_laptop;
+                found = true;
             }
         }
         
@@ -371,7 +337,6 @@ public:
         port_out_img.interrupt();
         port_out_imginfo.interrupt();
                     //////////////////////////////////////////////////////////////////////////////////////////////////////
-        port_rpc_are_get_hand.interrupt();
         mutex.post();
         cout << "returning transformer thread interrupt..." << endl;
     }
@@ -387,7 +352,6 @@ public:
         port_out_img.close();
         port_out_imginfo.close();
                     //////////////////////////////////////////////////////////////////////////////////////////////////////
-        port_rpc_are_get_hand.close();
         mutex.post();
 
         cout << "returning transformer thread release..." << endl;
@@ -660,20 +624,16 @@ private:
     TransformerThread                   *thr_transformer;
     StorerThread                        *thr_storer;
 
-    //rpc are
-    RpcClient                           port_rpc_are;
-    RpcClient                           port_rpc_are_get;
-    RpcClient                           port_rpc_are_cmd;
-    //rpc human
-    RpcClient                           port_rpc_human;
+    //rpc laptop
+    RpcClient                           port_rpc_laptop;
     //rpc classifier
     RpcClient                           port_rpc_classifier;
 
     //output
     Port                                port_out_speech;
 
-    double                              observe_human_time_training;
-    double                              observe_human_time_classify;
+    double                              observe_laptop_time_training;
+    double                              observe_laptop_time_classify;
     double                              single_operator_time;
 
     int                                 mode;
@@ -717,112 +677,28 @@ private:
 
     }
 
-    bool observe_robot()
-    {
-        //check if the robot is already holding an object
-        Bottle command,reply;
-        command.addString("get");
-        command.addString("hold");
-        port_rpc_are_get.write(command,reply);
-
-        if(reply.size()==0)
-            return false;
-
-        //if the robot is not holding an object then ask the human to give one
-        if(reply.get(0).asVocab()!=ACK)
-        {
-            reply.clear();
-            command.clear();
-            command.addString("expect");
-            command.addString("near");
-            command.addString("no_sacc");
-            port_rpc_are_cmd.write(command,reply);
-
-            if(reply.size()==0 || reply.get(0).asVocab()!=ACK)
-                return false;
-        }
-
-        //resume feature storing
-        thr_transformer->resumeCoding();
-
-        //perform the exploration of the hand
-        reply.clear();
-        command.clear();
-        command.addString("explore");
-        command.addString("hand");
-        command.addString("no_sacc");
-        port_rpc_are_cmd.write(command,reply);
-
-        //interrupt feature storing
-        thr_transformer->interruptCoding();
-
-        return true;
-    }
-
-    bool observe_human()
+    bool observe_laptop()
     {
 
-        if (mode==MODE_HUMAN_IDLE)
+        if (mode==MODE_LAPTOP_IDLE)
         {
-            // begin tracking code
-            Bottle cmd_are,reply_are;
-
-            cmd_are.addString("idle");
-            port_rpc_are_cmd.write(cmd_are,reply_are);
-            if(reply_are.size()>0 && reply_are.get(0).asVocab()==ACK)
-            {
-                reply_are.clear();
-                cmd_are.clear();
-
-                cmd_are.addString("track");
-                cmd_are.addString("motion");
-                cmd_are.addString("no_sacc");
-
-                port_rpc_are_cmd.write(cmd_are,reply_are);
-
-                if(reply_are.size()>0 && reply_are.get(0).asVocab()==ACK)
-                {
-                    set_mode(MODE_HUMAN_TRACK);
-                    speak("Begin tracking mode.");
-                }
-                else
-                    speak("Cannot set ARE to 'track motion no_sacc'");
-            }
-            else
-                speak("Cannot set ARE to 'idle'");
-            // end tracking code
-
             // time for the single operator to position the object
             speak("I'm waiting for you to position...");
             Time::delay(single_operator_time);
-            speak("*************************** Image acquisition started ***************************");
+            speak("Let me see.");
             thr_transformer->resumeCoding();
         }
 
         if (state==STATE_OBSERVING)
         {
-            Time::delay(observe_human_time_training);
+            Time::delay(observe_laptop_time_training);
             thr_transformer->interruptCoding();
 
-            // begin tracking code
-            Bottle cmd_are,reply_are;
-
-            cmd_are.addString("idle");
-            port_rpc_are_cmd.write(cmd_are,reply_are);
-            if(reply_are.size()>0 && reply_are.get(0).asVocab()==ACK)
-            {
-                set_mode(MODE_HUMAN_IDLE);
-                speak("End tracking mode.");
-            }
-            else
-                speak("Cannot set ARE to 'idle'");
-            // end tracking code
-
-            speak("*************************** Image acquisition done ******************************");
+            speak("I'm dome.");
             thr_storer->reset_scores();
         }
         else 
-            Time::delay(observe_human_time_classify);
+            Time::delay(observe_laptop_time_classify);
 
         return true;
     }
@@ -841,7 +717,7 @@ private:
                 break;
             }
 
-            case STATE_CLASSIFY:
+            case STATE_CLASSIFYING:
             {
                 speak("Let me see.");
                 break;
@@ -850,25 +726,19 @@ private:
 
         bool ok=false;
 
-        if (state==STATE_OBSERVING || state==STATE_CLASSIFY) 
+        if (state==STATE_OBSERVING || state==STATE_CLASSIFYING)
         {
             switch(mode)
             {
-                case MODE_ROBOT:
+                case MODE_LAPTOP_IDLE:
                 {
-                    ok=observe_robot();
+                    ok=observe_laptop();
                     break;
                 }
 
-                case MODE_HUMAN_IDLE:
+                case MODE_LAPTOP_OBSERVE:
                 {
-                    ok=observe_human();
-                    break;
-                }
-
-                case MODE_HUMAN_TRACK:
-                {
-                    ok=observe_human();
+                    ok=observe_laptop();
                     break;
                 }
 
@@ -878,41 +748,11 @@ private:
         return ok;
     }
 
-    bool complete_robot()
+
+    bool complete_laptop()
     {
 
         thr_transformer->interruptCoding();
-
-        //just drop the object
-        Bottle command,reply;
-        command.addString("give");
-        port_rpc_are_cmd.write(command,reply);
-
-        command.clear();
-        command.addString("home");
-        port_rpc_are_cmd.write(command,reply);
-
-        return true;
-    }
-
-    bool complete_human()
-    {
-
-        thr_transformer->interruptCoding();
-
-        // begin tracking code
-        Bottle cmd_are,reply_are;
-
-        cmd_are.addString("idle");
-        port_rpc_are_cmd.write(cmd_are,reply_are);
-        if(reply_are.size()>0 && reply_are.get(0).asVocab()==ACK)
-        {
-            set_mode(MODE_HUMAN_IDLE);
-            speak("End tracking mode.");
-        }
-        else
-            speak("Cannot set ARE to 'idle'");
-        // end tracking code
 
         return true;
     }
@@ -923,19 +763,13 @@ private:
 
         switch(mode)
         {
-            case MODE_ROBOT:
+            case MODE_LAPTOP_OBSERVE:
             {
-                ok=complete_robot();
+                ok=complete_laptop();
                 break;
             }
 
-            case MODE_HUMAN_TRACK:
-            {
-                ok=complete_human();
-                break;
-            }
-
-            case MODE_HUMAN_IDLE:
+            case MODE_LAPTOP_IDLE:
             {
                 ok=true;
                 break;
@@ -991,7 +825,7 @@ private:
                 break;
             }
 
-            case STATE_CLASSIFY:
+            case STATE_CLASSIFYING:
             {
                 if(classified())
                     complete();
@@ -1020,10 +854,7 @@ private:
                 done=true;
         }
 
-        //string current_class;
-        //thr_transformer->get_current_class(current_class);
-        //speak("Ok, now I know the "+current_class);
-        speak("Ok, now I know the observed objects");
+        speak("Ok, now I know the observed objects.");
         curr_time=Time::now();
 
         set_state(STATE_IDLE);
@@ -1042,8 +873,8 @@ public:
 
         string name=rf.find("name").asString().c_str();
 
-        observe_human_time_training = rf.check("observe_human_time_training",Value(20.0)).asDouble();
-        observe_human_time_classify = rf.check("observe_human_time_classify",Value(15.0)).asDouble();
+        observe_laptop_time_training = rf.check("observe_laptop_time_training",Value(20.0)).asDouble();
+        observe_laptop_time_classify = rf.check("observe_laptop_time_classify",Value(15.0)).asDouble();
         single_operator_time = rf.check("single_operator_time",Value(5.0)).asDouble();
 
         class_itr_max=rf.check("class_iter_max",Value(3)).asInt();
@@ -1054,24 +885,17 @@ public:
         thr_storer=new StorerThread(rf);
         thr_storer->start();
 
-        //Ports
-        //-----------------------------------------------------------
-        //rpc
-        port_rpc_are.open(("/"+name+"/are/rpc").c_str());
-        port_rpc_are_get.open(("/"+name+"/are/get:io").c_str());
-        port_rpc_are_cmd.open(("/"+name+"/are/cmd:io").c_str());
         port_rpc_classifier.open(("/"+name+"/classifier:io").c_str());
-
-        //speech
         port_out_speech.open(("/"+name+"/speech:o").c_str());
-        //------------------------------------------------------------
 
         thr_transformer->interruptCoding();
 
         set_state(STATE_IDLE);
-        set_mode(MODE_HUMAN_IDLE);
+        set_mode(MODE_LAPTOP_IDLE);
+
         curr_time=Time::now();
         reset_label_time=5.0;
+
         return true;
     }
 
@@ -1087,7 +911,7 @@ public:
 
         mutex.wait();
 
-        if (state==STATE_OBSERVING || state==STATE_CLASSIFY)
+        if (state==STATE_OBSERVING || state==STATE_CLASSIFYING)
             observe();
 
         decide();
@@ -1147,10 +971,10 @@ public:
                             sort(known_objects.begin(),known_objects.end());
                         }
 
-                        reply.addString(("storing " + class_name).c_str());
+                        reply.addString(("Storing " + class_name).c_str());
                     }
                     else
-                        reply.addString("classifier busy!");
+                        reply.addString("Classifier busy!");
                 }
                 else
                     reply.addString("Error! Need to specify a class!");
@@ -1166,7 +990,7 @@ public:
                 if(command.size()==1)
                 {
                     set_state(STATE_TRAINING);
-                    reply.addString("learning observed objects");
+                    reply.addString("Learning observed objects...");
                 }
                 else
                     reply.addString("Command not recognized!");
@@ -1193,15 +1017,13 @@ public:
                         thr_transformer->set_current_class("?");
                         thr_transformer->set_true_class(class_name);
 
-                        if(mode==MODE_ROBOT)
-                            thr_storer->reset_scores();
-                        set_state(STATE_CLASSIFY);
+                        set_state(STATE_CLASSIFYING);
                         class_itr_current=0;
 
-                        reply.addString(("classifying "+class_name).c_str());
+                        reply.addString(("Classifying "+class_name).c_str());
                     }
                     else
-                        reply.addString("classifier busy!");
+                        reply.addString("Classifier busy!");
 
                 } else
                 {
@@ -1212,68 +1034,14 @@ public:
                         thr_transformer->set_current_class("?");
                         thr_transformer->set_true_class("?");
 
-                        if(mode==MODE_ROBOT)
-                            thr_storer->reset_scores();
-                        set_state(STATE_CLASSIFY);
+                        set_state(STATE_CLASSIFYING);
                         class_itr_current=0;
 
-                        reply.addString("classifying");
+                        reply.addString("Classifying");
                     }
                     else
-                        reply.addString("classifier busy!");
+                        reply.addString("Classifier busy!");
                 }
-
-                mutex.post();
-                break;
-            }
-
-            case CMD_ROBOT:
-            {
-                mutex.wait();
-
-                Bottle cmd_are,reply_are;
-                cmd_are.addString("idle");
-                port_rpc_are_cmd.write(cmd_are,reply_are);
-
-                if(reply_are.size()>0 && reply_are.get(0).asVocab()==ACK)
-                {
-                    reply_are.clear();
-                    cmd_are.clear();
-                    cmd_are.addString("home");
-                    port_rpc_are_cmd.write(cmd_are,reply_are);
-
-                    if(reply_are.size()>0 && reply_are.get(0).asVocab()==ACK)
-                    {
-                        set_mode(MODE_ROBOT);
-                        reply.addString("ack");
-                    }
-                    else
-                        reply.addString("Error! Cannot give ARE 'home' command.");
-                }
-                else
-                    reply.addString("Error! Cannot set ARE to 'idle'.");
-
-                mutex.post();
-                break;
-            }
-
-            case CMD_HUMAN:
-            {
-                mutex.wait();
-
-                // begin tracking code
-                Bottle cmd_are,reply_are;
-
-                cmd_are.addString("idle");
-                port_rpc_are_cmd.write(cmd_are,reply_are);
-                if(reply_are.size()>0 && reply_are.get(0).asVocab()==ACK)
-                {
-                    set_mode(MODE_HUMAN_IDLE);
-                    reply.addString("ack");
-                }
-                else
-                    reply.addString("Error! Cannot set ARE to 'idle'.");
-                // end tracking code
 
                 mutex.post();
                 break;
@@ -1296,7 +1064,7 @@ public:
                     
                     if(reply_classifer.size()>0 && reply_classifer.get(0).asVocab()==ACK)
                     {
-                        speak("forgotten "+class_forget);
+                        speak("Forgotten "+class_forget);
                         reply.addVocab(ACK);
                     }
                     else
@@ -1333,41 +1101,35 @@ public:
     {
         mutex.wait();
 
-        port_rpc_are.interrupt();
-        port_rpc_are_cmd.interrupt();
-        port_rpc_are_cmd.interrupt();
         port_rpc_classifier.interrupt();
         port_out_speech.interrupt();
 
-        cout << "calling transformer thread interrupt..." << endl;
+        cout << "Calling transformer thread interrupt..." << endl;
         thr_transformer->interrupt();
-        cout << "calling storer thread interrupt..." << endl;
+        cout << "Calling storer thread interrupt..." << endl;
         thr_storer->interrupt();
 
         mutex.post();
 
-        cout << "returning manager thread interrupt..." << endl;
+        cout << "Returning manager thread interrupt..." << endl;
     }
 
     void threadRelease()
     {
         mutex.wait();
-        port_rpc_are.close();
-        port_rpc_are_cmd.close();
-        port_rpc_are_cmd.close();
         port_rpc_classifier.close();
         port_out_speech.close();
 
-        cout << "calling transformer thread release..." << endl;
+        cout << "Calling transformer thread release..." << endl;
         thr_transformer->stop();
         delete thr_transformer;
-        cout << "calling storer thread release..." << endl;
+        cout << "Calling storer thread release..." << endl;
         thr_storer->stop();
         delete thr_storer;
 
         mutex.post();
 
-        cout << "returning manager thread release..." << endl;
+        cout << "Returning manager thread release..." << endl;
     }
 
 };
@@ -1377,7 +1139,7 @@ class ManagerModule: public RFModule
 {
 protected:
     ManagerThread       *manager_thr;
-    RpcServer           port_rpc_human;
+    RpcServer           port_rpc_laptop;
     Port                port_rpc;
 
 public:
@@ -1393,7 +1155,7 @@ public:
         manager_thr=new ManagerThread(rf);
         manager_thr->start();
 
-        port_rpc_human.open(("/"+name+"/human:io").c_str());
+        port_rpc_laptop.open(("/"+name+"/laptop:io").c_str());
         port_rpc.open(("/"+name+"/rpc").c_str());
         attach(port_rpc);
         return true;
@@ -1401,25 +1163,25 @@ public:
 
     bool interruptModule()
     {
-        port_rpc_human.interrupt();
+        port_rpc_laptop.interrupt();
         port_rpc.interrupt();
-        cout << "calling manager thread interrupt..." << endl;
+        cout << "Calling manager thread interrupt..." << endl;
         manager_thr->interrupt();
 
-        cout << "returning manager module interrupt..." << endl;
+        cout << "Returning manager module interrupt..." << endl;
         return true;
     }
 
     bool close()
     {
-        cout << "calling manager thread stop..." << endl;
+        cout << "Calling manager thread stop..." << endl;
         manager_thr->stop();
         delete manager_thr;
 
-        port_rpc_human.close();
+        port_rpc_laptop.close();
         port_rpc.close();
 
-        cout << "returning manager module close..." << endl;
+        cout << "Returning manager module close..." << endl;
         return true;
     }
 
@@ -1436,11 +1198,11 @@ public:
     bool   updateModule()
     {
         Bottle human_cmd,reply;
-        port_rpc_human.read(human_cmd,true);
+        port_rpc_laptop.read(human_cmd,true);
         if(human_cmd.size()>0)
         {
             manager_thr->execHumanCmd(human_cmd,reply);
-            port_rpc_human.reply(reply);
+            port_rpc_laptop.reply(reply);
         }
 
         return true;
@@ -1458,7 +1220,7 @@ int main(int argc, char *argv[])
 
    ResourceFinder rf;
    rf.setVerbose(true);
-   rf.setDefaultContext("onthefly-recognition");
+   rf.setDefaultContext("ontheflyrec_lap");
    rf.setDefaultConfigFile("config.ini");
    rf.configure(argc,argv);
    rf.setDefault("name","onTheFlyRecognition");
